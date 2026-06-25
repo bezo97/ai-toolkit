@@ -24,7 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
-from torch.nn.attention import SDPBackend, sdpa_kernel
+
 from torch.utils.checkpoint import checkpoint
 
 
@@ -56,10 +56,9 @@ def attention(
     scale: float | None = None,
     gqa: bool = False,
 ) -> Tensor:
-    with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
-        x = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=mask, scale=scale, enable_gqa=gqa
-        )
+    x = F.scaled_dot_product_attention(
+        q, k, v, attn_mask=mask, scale=scale, enable_gqa=gqa
+    )
     return rearrange(x, "B H L D -> B L (H D)")
 
 

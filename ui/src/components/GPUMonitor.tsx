@@ -98,17 +98,11 @@ const GpuMonitor: React.FC = () => {
       );
     }
 
-    if (!gpuData.hasNvidiaSmi && !gpuData.isMac) {
-      return (
-        <div className="bg-yellow-900 border border-yellow-700 text-yellow-300 px-4 py-3 rounded relative" role="alert">
-          <strong className="font-bold">No NVIDIA GPUs detected!</strong>
-          <span className="block sm:inline"> nvidia-smi is not available on this system.</span>
-          {gpuData.error && <p className="mt-2 text-sm">{gpuData.error}</p>}
-        </div>
-      );
-    }
-
+    // No GPUs detected at all (no nvidia-smi, no PyTorch fallback, not Mac).
     if (gpuData.gpus.length === 0) {
+      if (!gpuData.hasNvidiaSmi && !gpuData.isMac) {
+        return null;
+      }
       return (
         <div className="bg-yellow-900 border border-yellow-700 text-yellow-300 px-4 py-3 rounded relative" role="alert">
           <span className="block sm:inline">No GPUs found, but nvidia-smi is available.</span>

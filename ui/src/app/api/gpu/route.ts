@@ -3,6 +3,8 @@ import { exec, execSync } from 'child_process';
 import { promisify } from 'util';
 import { createRequire } from 'module';
 import os from 'os';
+import path from 'path';
+import fs from 'fs';
 
 const execAsync = promisify(exec);
 
@@ -140,11 +142,20 @@ export async function GET() {
     const hasNvidiaSmi = await checkNvidiaSmi(isWindows);
 
     if (!hasNvidiaSmi) {
+      // Fallback: use PyTorch to detect GPUs (works on both NVIDIA and ROCm)
+      const pytorchGpus = await getPytorchGpus();
+      if (pytorchGpus.length > 0) {
+        return NextResponse.json({
+          hasNvidiaSmi: false,
+          isMac: false,
+          gpus: pytorchGpus,
+        });
+      }
       return NextResponse.json({
         hasNvidiaSmi: false,
         isMac: false,
         gpus: [],
-        error: 'nvidia-smi not found or not accessible',
+        error: 'nvidia-smi not found and no PyTorch CUDA devices detected',
       });
     }
 
@@ -166,6 +177,74 @@ export async function GET() {
       },
       { status: 500 },
     );
+  }
+}
+
+/**
+ * Resolve the Python interpreter to use for GPU detection.
+ * Tries the project venv first, then falls back to `python` / `python3`.
+ */
+function findPython(): string {
+  // Walk up from this file (ui/src/app/api/gpu/route.ts) to project root
+  const projectRoot = path.resolve(__dirname, '../../../..');
+  const candidates = [
+    path.join(projectRoot, 'venv', 'Scripts', 'python.exe'),   // Windows
+    path.join(projectRoot, 'venv', 'bin', 'python'),            // Linux/macOS
+    path.join(projectRoot, '.venv', 'Scripts', 'python.exe'),   // Windows alt
+    path.join(projectRoot, '.venv', 'bin', 'python'),           // Linux/macOS alt
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  // Fallback: hope `python` is on PATH
+  return 'python';
+}
+
+/**
+ * Fallback GPU detection via PyTorch subprocess.
+ * Works on both NVIDIA CUDA and AMD ROCm (torch.cuda.* shim).
+ * Returns basic GPU info without live stats (no temp, utilization, etc.).
+ */
+async function getPytorchGpus(): Promise<any[]> {
+  const python = findPython();
+  const script = `
+import torch, json
+gpus = []
+if torch.cuda.is_available():
+    for i in range(torch.cuda.device_count()):
+        total_mem = 0
+        try:
+            total_mem = torch.cuda.mem_get_info(i)[1] // (1024**2)
+        except Exception:
+            total_mem = torch.cuda.get_device_properties(i).total_mem // (1024**2)
+        gpus.append({"index": i, "name": torch.cuda.get_device_name(i), "total_mem": total_mem})
+print(json.dumps(gpus))
+`;
+  // Write to temp file to avoid all shell quoting issues
+  const tmpFile = path.join(os.tmpdir(), `aitk_gpu_detect_${Date.now()}.py`);
+  try {
+    fs.writeFileSync(tmpFile, script, 'utf-8');
+    const { stdout } = await execAsync(`${python} ${tmpFile}`, {
+      timeout: 20000,
+    });
+    const gpus: any[] = JSON.parse(stdout.trim());
+    // Map to the GpuInfo shape with zeroed-out stats
+    return gpus.map((g: any) => ({
+      index: g.index,
+      name: g.name,
+      driverVersion: 'PyTorch',
+      temperature: 0,
+      utilization: { gpu: 0, memory: 0 },
+      memory: { total: g.total_mem, free: g.total_mem, used: 0 },
+      power: { draw: 0, limit: 0 },
+      clocks: { graphics: 0, memory: 0 },
+      fan: { speed: 0 },
+    }));
+  } catch (err) {
+    console.warn('PyTorch GPU detection failed:', err instanceof Error ? err.message : String(err));
+    return [];
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch { /* ignore cleanup errors */ }
   }
 }
 

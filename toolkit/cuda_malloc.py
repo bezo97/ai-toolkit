@@ -82,6 +82,12 @@ if not cuda_malloc:
     except:
         pass
 
+def is_rocm():
+    """Check if ROCm is available (pre-PyTorch import, via env vars)."""
+    rocm_env_vars = ['HIP_VISIBLE_DEVICES', 'ROCR_VISIBLE_DEVICES', 'HIP_PATH', 'ROCM_PATH']
+    return any(os.environ.get(var) for var in rocm_env_vars)
+
+
 if cuda_malloc:
     env_var = os.environ.get('PYTORCH_CUDA_ALLOC_CONF', None)
     if env_var is None:
@@ -91,3 +97,14 @@ if cuda_malloc:
 
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = env_var
     print("CUDA Malloc Async Enabled")
+
+# ROCm path: set HIP alloc conf if ROCm is detected
+if not cuda_malloc and is_rocm():
+    env_var = os.environ.get('PYTORCH_HIP_ALLOC_CONF', None)
+    if env_var is None:
+        env_var = "backend:cudaMallocAsync"
+    else:
+        env_var += ",backend:cudaMallocAsync"
+
+    os.environ['PYTORCH_HIP_ALLOC_CONF'] = env_var
+    print("HIP Malloc Async Enabled")
